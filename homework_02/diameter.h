@@ -33,26 +33,26 @@ union f_cast<float> {
 };
 
 struct IdWeight {
-    unsigned column;
+    uint16_t column;
     float weight;
 };
 
-void my_sssp(unsigned source,
-             unsigned* offset,
+void my_sssp(uint16_t source,
+             uint16_t* offset,
              IdWeight* idw,
-             unsigned& dst,
+             uint16_t& dst,
              float& dst_distance);
 
-void diameter(unsigned* offset,
-              unsigned* column,
+void diameter(uint16_t* offset,
+              uint16_t* column,
               float* weight,
               float* max_dist,
-              unsigned* src,
-              unsigned* des);
+              uint16_t* src,
+              uint16_t* des);
 
-void diameter_kernel(unsigned* offset,
-					unsigned* column,
+void diameter_kernel(uint16_t* offset,
+					uint16_t* column,
 					float* weight,
 					float* max_dist,
-					unsigned* src,
-					unsigned* des);
+					uint16_t* src,
+					uint16_t* des);

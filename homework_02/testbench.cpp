@@ -2,23 +2,23 @@
 #include "utils.hpp"
 
 
-void sssp_TB(unsigned int numVert,
-             unsigned int numEdge,
-             unsigned int source,
-             unsigned int* offset,
-             unsigned int* column,
+void sssp_TB(uint16_t numVert,
+             uint16_t numEdge,
+             uint16_t source,
+             uint16_t* offset,
+             uint16_t* column,
              float* weight,
              float* distance) {
     for (int i = 0; i < numVert; i++) {
         distance[i] = std::numeric_limits<float>::infinity();
     }
 
-    std::queue<unsigned int> q;
+    std::queue<uint16_t> q;
 
     q.push(source);
     distance[source] = 0;
     while (!q.empty()) {
-        unsigned int tmp = q.front();
+        uint16_t tmp = q.front();
         for (int i = offset[tmp]; i < offset[tmp + 1]; i++) {
             float fromDist = distance[tmp];
             float toDist = distance[column[i]];
@@ -32,13 +32,13 @@ void sssp_TB(unsigned int numVert,
     }
 }
 
-unsigned offset32[NUMVert + 10];
-unsigned column32[NUMEdge + 10];
+uint16_t offset32[NUMVert + 10];
+uint16_t column32[NUMEdge + 10];
 float weight32[NUMEdge + 10];
 
 float max_dist[1];
-unsigned source[1];
-unsigned destination[1];
+uint16_t source[1];
+uint16_t destination[1];
 
 int main(int argc, const char* argv[]) {
     std::cout << "\n---------------------diameter Traversal Test----------------\n";
