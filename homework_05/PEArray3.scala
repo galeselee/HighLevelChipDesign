@@ -28,6 +28,7 @@ class Bufferab_in[T <: Data](dtype: T) extends Module{
   }
   din.ready := !fullReg || (dout.ready && a_valid && b_valid && c_valid)  //TODO
   dout.valid := fullReg
+  dout.bits := dataReg
 }
 
 class Bufferc_in[T <: Data](dtype: T) extends Module{
@@ -42,6 +43,7 @@ class Bufferc_in[T <: Data](dtype: T) extends Module{
   }
   din.ready := !fullReg || dout.ready
   dout.valid := fullReg
+  dout.bits := dataReg
 }
 
 // copy from csdn https://blog.csdn.net/weixin_44639164/article/details/123722937
@@ -89,26 +91,38 @@ class PE[T<:Bits with Num[T]](dtype: T, n: Int) extends Module{
   val c_data_out = Module(New Bufferc_out(PData(dtype), 4))
   val a_valid = RegInit(0.B)
   val b_valid = RegInit(0.B)
-  val c_valid = RegInit(0.B)
   val for_one = RegInit(1.B)
+  val j_pos = RegInit(n.U(2.W))
+
+  val c_val = Reg(PData(dtype))
+  val c_val_out = IO(Output(PData(dtype)))
+  val c_valid = RegInit(0.B)
   val c_valid_out = IO(Output(Bool()))
-  
+
   c_valid_out := c_valid
+  c_val_out := c_val
 
   a_valid := a_data.dout.valid
   b_valid := b_data.dout.valid
-  c_valid := c_data_in.dout.valid // TODO
   a_data.a_valid := a_valid
   a_data.b_valid := b_valid
   a_data.c_valid := c_valid
   b_data.a_valid := a_valid
   b_data.b_valid := b_valid
   b_data.c_valid := c_valid
+
+  when (c_valid) {
+    c_valid := c_valid
+  }.otherwise{
+    when (c_data_in.c_in.pos == j_pos) {
+      c_valid := for_one
+    }.otherwise {
+      c_valid := c_valid
+    }
+  }
   
-  val c_val = Reg(PData(data))
-  when (c_data_in.c_in.pos == j_pos) { // may error 
+  when (c_data_in.c_in.pos == j_pos) {  
     c_val := c_data_in.c_in.bits
-    c_valid := for_one
   }.otherwise{
     when (a_valid && b_valid && c_valid && c_data_out.io.enq.ready) {
       c_val := c_val + a_data_in.data_out * b_data_in.data_out
@@ -116,10 +130,6 @@ class PE[T<:Bits with Num[T]](dtype: T, n: Int) extends Module{
       c_val := c_val
     }
   }
-
-  // when (c_data_in.c_in.pos == j_pos && c_valid) {
-    // 
-  // }
 
 }
 
@@ -129,19 +139,85 @@ class PEArray[T<:Bits with Num[T]](dtype:T) extends Module{
   val c_in = IO(Vec(4, DeqIO(PData(dtype))))
   val c_out = IO(Vec(4, EnqIO(PData(dtype))))
 
+  val PEs = for (i<-0 until 4) yield
+              for (j<-0 until 4) yield
+                Module(new PE(dtype, j))
 
-  def AInputConnect(PEs:Seq[Seq[PE[T]]], dx: Int, dy: Int): Unit = { 
+  val for_one = RegInit(1.B)
+  val for_zero = RegInit(0.B)
+
+
+  def AInputConnect(PEs:Seq[Seq[PE[T, Int]]], dx: Int, dy: Int): Unit = {
+    for (i<-0 until 4; j<-0 until 4) {
+      if (0 <= i+dx && i+dx < 4 && 0 <= j+dy && j+dy < 4) {
+        PEs(i+dx)(j+dy).a_data.din.valid := PEs(i)(j).a_data.dout.valid
+        PEs(i+dx)(j+dy).a_data.din.bits := PEs(i)(j).a_data.dout.bits
+        PEs(i)(j).a_data.dout.ready := PEs(i+dx)(j+dy).a_data.din.ready
+      }
+    }
+    for (i<-0 until 4) {
+      PEs(0)(i).a_data.din.valid := a_in(i).valid
+      PEs(0)(i).a_data.din.bits := a_in(i).bits
+      a_in(i).ready := PEs(0)(i).a_data.din.ready
+      PEs(3)(i).a_data.dout.ready := for_one
+    }
   }
-  def BInputConnect(PEs:Seq[Seq[PE[T]]], dx: Int, dy: Int): Unit = { 
+
+  def BInputConnect(PEs:Seq[Seq[PE[T, Int]]], dx: Int, dy: Int): Unit = { 
+    for (i<-0 until 4; j<-0 until 4) {
+      if (0 <= i+dx && i+dx < 4 && 0 <= j+dy && j+dy < 4) {
+        PEs(i+dx)(j+dy).b_data.din.valid := PEs(i)(j).b_data.dout.valid
+        PEs(i+dx)(j+dy).b_data.din.bits := PEs(i)(j).b_data.dout.bits
+        PEs(i)(j).b_data.dout.ready := PEs(i+dx)(j+dy).b_data.din.ready
+      }
+    }
+    for (i<-0 until 4) {
+      PEs(i)(0).b_data.din.valid := b_in(i).valid
+      PEs(i)(0).b_data.din.bits := b_in(i).bits
+      b_in(i).ready := PEs(i)(0).b_data.din.ready
+      PEs(i)(3).b_data.dout.ready := for_one
+    }
   }
-  def CInputConnect(PEs:Seq[Seq[PE[T]]], dx: Int, dy: Int): Unit = { 
+
+  def CInputConnect(PEs:Seq[Seq[PE[T, Int]]], dx: Int, dy: Int): Unit = {
+    for (i<-0 until 4; j<-0 until 4) {
+      if (0 <= i+dx && i+dx < 4 && 0 <= j+dy && j+dy < 4) {
+        PEs(i+dx)(j+dy).c_data.din.valid := PEs(i)(j).c_data.dout.valid
+        PEs(i+dx)(j+dy).c_data.din.bits := PEs(i)(j).c_data.dout.bits
+        PEs(i)(j).c_data.dout.ready := PEs(i+dx)(j+dy).c_data.din.ready
+      }
+    }
+    for (i<-0 until 4) {
+      PEs(i)(0).c_data.din.valid := c_in(i).valid
+      PEs(i)(0).c_data.din.bits := c_in(i).bits
+      c_in(i).ready := PEs(i)(0).c_data.din.ready
+      PEs(i)(3).c_data.dout.ready := for_one
+    }
   }
-  def COutputConnect(PEs:Seq[Seq[PE[T]]], dx: Int, dy: Int): Unit = { 
+
+  def COutputConnect(PEs:Seq[Seq[PE[T, Int]]], dx: Int, dy: Int): Unit = {
+    val pos_soft = for (i<-0 until 4) yield i.U(2.W)
+    val j_pos = RegInit(Vec(pos_soft))    
+    for (i<-dx until 4; j<-dy until 4) {
+      
+      when(PEs(i)(j).c_data_in.c_in.pos == j_pos && PEs(i)(j).c_valid_out) {
+        PEs(i)(j).c_data_out.din.bits := c_val_out
+        PEs(i)(j).c_data_out.din.valid := for_one
+        PEs(i-dx)(j-dy).c_data_out.dout.ready := for_zero
+      }.otherwise {
+        PEs(i)(j).c_data_out.din.bits := PEs(i-dx)(j-dy).c_data_out.dout.bits
+        PEs(i)(j).c_data_out.din.valid := PEs(i-dx)(j-dy).c_data_out.dout.valid
+        PEs(i-dx)(j-dy).c_data_out.dout.ready := PEs(i)(j).c_data_out.din.ready
+      }
+    }
+    for (i<-0 until 4) {
+      PEs(i)(3).c_data_out.dout.ready := c_in(i).ready
+      c_in(i).bits := PEs(i)(3).c_data_out.dout.bits
+      c_in(i).valid := PEs(i)(3).c_data_out.dout.valid
+    }
   }
   AInputConnect(PEs, 1, 0)
   BInputConnect(PEs, 0, 1)
   CInputConnect(PEs, 0, 1)
-  COuuputConnect(PEs, 0, 1)
-
-
+  COutputConnect(PEs, 0, 1)
 }
