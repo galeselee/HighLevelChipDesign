@@ -13,23 +13,37 @@ object PData{
   def apply[T<:Data](dtype:T) = new PData(dtype)
 }
 
-class Bufferab_in[T <: Data](dtype: T) extends Module{
+class Bufferab_in[T <: Data](dtype: T, n: UInt, m: UInt) extends Module{
   val din = IO(DeqIO(dtype))
   val dout = IO(EnqIO(dtype))
   val fullReg = RegInit(0.B)
   val dataReg = Reg(dtype)
   val data_out = IO(Output(dtype))
-  val a_valid = IO(Input(Bool()))
-  val b_valid = IO(Input(Bool()))
+  val ab_in_valid = IO(Input(Bool()))
+  val ab_out_valid = IO(Output(Bool()))
+
   val c_valid = IO(Input(Bool()))
+
+  val count = IO(Input(UInt(32.W)))
+
+  // val reg_n = RegInit(n)
+  // val reg_m = RegInit(m)
+  // val reg_3 = RegInit(3.U(2.W))
+  // when(reg_m === reg_n) {
+  //   printf(p"count = ${count}, n = m = ${reg_n}, a_valid = ${a_valid}, b_valid = ${b_valid}, c_valid = ${c_valid}, ready = ${dout.ready}, full=${fullReg}\n")
+  // }
+
   data_out := dataReg
-  when (dout.ready || !fullReg){
+  when ((dout.ready && ab_in_valid && c_valid) || !fullReg){ // print fullReg
     fullReg := din.valid
     dataReg := din.bits
   }
-  din.ready := !fullReg || (dout.ready && a_valid && b_valid && c_valid)  //TODO
-  dout.valid := fullReg
+  din.ready := !fullReg || (dout.ready && ab_in_valid && c_valid)  //TODO
+  // dout.valid := fullReg
+  val for_zero = RegInit(0.B)
+  dout.valid := for_zero
   dout.bits := dataReg
+  ab_out_valid := fullReg
 }
 
 class Bufferc_in[T <: Data](dtype: T) extends Module{
@@ -75,7 +89,7 @@ class Bufferc_out[T <: Data](gen: T) extends Module {
     deqPtr := Mux(doDeq, deqPtrInc, deqPtr) // 出栈，改变首，头向后移一个
     
     isFull := isFullNext
-    val ram = Mem(10, gen)
+    val ram = Reg(Vec(4, gen))
     when(doEnq){
         ram(enqPtr) := io.enq.bits
     }
@@ -83,21 +97,27 @@ class Bufferc_out[T <: Data](gen: T) extends Module {
     io.deq.valid := !isEmpty
     
     ram(deqPtr) <> io.deq.bits
+
+    val ramio = IO(Output(Vec(4, gen)))
+    ramio := ram
 }
 
-class PE[T<:Bits with Num[T]](dtype: T, n: UInt) extends Module{
-
+class PE[T<:Bits with Num[T]](dtype: T, n: UInt, m: UInt) extends Module{
   // Buffer
-  val a_data = Module(new Bufferab_in(dtype))
-  val b_data = Module(new Bufferab_in(dtype))
+  val a_data = Module(new Bufferab_in(dtype, n, m))
+  val b_data = Module(new Bufferab_in(dtype, n, m))
   val c_data_in = Module(new Bufferc_in(PData(dtype)))
   val c_data_out = Module(new Bufferc_out(PData(dtype)))
-  val a_valid = RegInit(0.B)
-  val b_valid = RegInit(0.B)
   val for_one = RegInit(1.B)
   val j_pos = RegInit(n)
 
   // IO
+  val ramio = IO(Output(Vec(4, PData(dtype))))
+  ramio := c_data_out.ramio
+  val count = IO(Input(UInt(32.W)))
+  a_data.count := count
+  b_data.count := count
+
   val a_din = IO(DeqIO(dtype))
   val a_dout = IO(EnqIO(dtype))
   a_data.din.valid := a_din.valid
@@ -136,41 +156,46 @@ class PE[T<:Bits with Num[T]](dtype: T, n: UInt) extends Module{
 
 
   val c_val = Reg(PData(dtype))
-  val c_val_out = IO(Output(PData(dtype)))
   val c_valid = RegInit(0.B)
   val c_valid_out = IO(Output(Bool()))
 
   c_valid_out := c_valid
-  c_val_out := c_val
 
-  a_valid := a_data.dout.valid
-  b_valid := b_data.dout.valid
-  a_data.a_valid := a_valid
-  a_data.b_valid := b_valid
+  a_data.ab_in_valid := b_data.ab_out_valid
+  b_data.ab_in_valid := a_data.ab_out_valid
   a_data.c_valid := c_valid
-  b_data.a_valid := a_valid
-  b_data.b_valid := b_valid
   b_data.c_valid := c_valid
 
-  when (c_valid) {
+  c_val.pos := j_pos
+
+  when (c_data_in.din.bits.pos === j_pos && c_data_in.din.valid) {
+    c_valid := for_one
+  }.otherwise {
     c_valid := c_valid
+  }
+  
+  val reg_0 = RegInit(0.U(2.W))
+  when (c_data_in.din.bits.pos === j_pos && c_data_in.din.valid) {  
+    c_val.data := c_data_in.din.bits.data
+      // printf(p"count = ${count}, c_val = $c_val, a_data = ${a_data.data_out}, b_data = ${b_data.data_out}, n = ${n}, m = ${m}\n")
   }.otherwise{
-    when (c_data_in.din.bits.pos === j_pos) {
-      c_valid := for_one
+    when (b_data.ab_out_valid && a_data.ab_out_valid && c_valid && c_data_out.io.enq.ready) {
+      c_val.data := c_val.data + a_data.data_out * b_data.data_out
+      a_dout.valid := for_one
+      b_dout.valid := for_one
+    //  when(m === 3.U) {
+   //       printf(p"count = ${count}, c_val = $c_val, a_data = ${a_data.data_out}, b_data = ${b_data.data_out}, n = ${n}\n")
+   //   }
+   //   when(n === 3.U) {
+   //       printf(p"count = ${count}, c_val = $c_val, a_data = ${a_data.data_out}, b_data = ${b_data.data_out}, n = ${n}, m = ${m}\n")
+   //   }
     }.otherwise {
-      c_valid := c_valid
+      c_val.data := c_val.data
     }
   }
   
-  when (c_data_in.din.bits.pos === j_pos) {  
-    c_val := c_data_in.din.bits
-  }.otherwise{
-    when (a_valid && b_valid && c_valid && c_data_out.io.enq.ready) {
-      c_val.data := c_val.data + a_data.data_out * b_data.data_out
-    }.otherwise {
-      c_val := c_val
-    }
-  }
+  val c_val_out = IO(Output(PData(dtype)))
+  c_val_out := c_val
 
 }
 
@@ -180,9 +205,14 @@ class PEArray[T<:Bits with Num[T]](dtype:T) extends Module{
   val c_in = IO(Vec(4, DeqIO(PData(dtype))))
   val c_out = IO(Vec(4, EnqIO(PData(dtype))))
 
+  val count = RegInit(1.U(32.W))
+  val acc = RegInit(1.U(32.W))
+  count := count + acc
+
+
   val PEs = for (i<-0 until 4) yield
               for (j<-0 until 4) yield
-                Module(new PE(dtype, j.U(2.W)))
+                Module(new PE(dtype, j.U(2.W), i.U(2.W)))
 
   val for_one = RegInit(1.B)
   val for_zero = RegInit(0.B)
@@ -196,6 +226,7 @@ class PEArray[T<:Bits with Num[T]](dtype:T) extends Module{
     }
     for (i<-0 until 4) {
       PEs(0)(i).a_din.valid := a_in(i).valid
+      ///printf(p"a_valid = ${a_in(i).valid} a_val = ${a_in(i).bits}c i = $i\n")
       PEs(0)(i).a_din.bits := a_in(i).bits
       a_in(i).ready := PEs(0)(i).a_din.ready
       PEs(3)(i).a_dout.ready := for_one
@@ -214,6 +245,7 @@ class PEArray[T<:Bits with Num[T]](dtype:T) extends Module{
       b_in(i).ready := PEs(i)(0).b_din.ready
       PEs(i)(3).b_dout.ready := for_one
     }
+    //printf(p"count = ${count}, b_valid = ${b_in(0).valid}, b_val = ${b_in(0).bits}, b_ready = ${b_in(0).ready}, c_valid = ${PEs(0)(0).c_valid_out}, b_dout_ready = ${PEs(0)(0).b_dout.ready}\n")
   }
 
   def CInputConnect(PEs:Seq[Seq[PE[T]]], dx: Int, dy: Int): Unit = {
@@ -232,19 +264,19 @@ class PEArray[T<:Bits with Num[T]](dtype:T) extends Module{
 
   def COutputConnect(PEs:Seq[Seq[PE[T]]], dx: Int, dy: Int): Unit = {
     val pos_soft = for (i<-0 until 4) yield i.U(2.W)
-    val j_pos = RegInit(VecInit(pos_soft))    
+    val j_pos = RegInit(VecInit(pos_soft))  
     for (i<-dx until 4; j<-dy until 4) {
-      when(PEs(i)(j).c_in_din.bits.pos === j_pos(j) && PEs(i)(j).c_valid_out) {
+      when(PEs(i)(j).c_in_din.bits.pos === j_pos(j) && PEs(i)(j).c_in_din.valid && PEs(i)(j).c_valid_out) {
           PEs(i)(j).c_out_din.bits := PEs(i)(j).c_val_out
           PEs(i)(j).c_out_din.valid := for_one
-          PEs(i-dx)(j-dy).c_out_dout.ready := for_zero
+          PEs(i-dx)(j-dy).c_out_dout.ready := PEs(i)(j).c_out_din.ready
         }.otherwise {
           PEs(i)(j).c_out_din <> PEs(i-dx)(j-dy).c_out_dout
         }
     }
     for (i <- 0 until 4) {
       PEs(i)(0).c_out_din.bits := PEs(i)(0).c_val_out
-      when (PEs(i)(0).c_in_din.bits.pos === j_pos(0) && PEs(i)(0).c_valid_out) {
+      when (PEs(i)(0).c_in_din.bits.pos === j_pos(0) && PEs(i)(0).c_in_din.valid && PEs(i)(0).c_valid_out) {
         PEs(i)(0).c_out_din.valid := for_one
       }.otherwise{
         PEs(i)(0).c_out_din.valid := for_zero
@@ -255,9 +287,24 @@ class PEArray[T<:Bits with Num[T]](dtype:T) extends Module{
       c_out(i).bits := PEs(i)(3).c_out_dout.bits
       c_out(i).valid := PEs(i)(3).c_out_dout.valid
     }
+    // printf(p"count = ${count}, ram = ${PEs(0)(3).ramio(0)}, ${PEs(0)(3).ramio(1)}, ${PEs(0)(3).ramio(2)}, ${PEs(0)(3).ramio(3)}\n")
+    // printf(p"count = ${count}, ram = ${PEs(1)(3).ramio(0)}, ${PEs(1)(3).ramio(1)}, ${PEs(1)(3).ramio(2)}, ${PEs(1)(3).ramio(3)}\n")
+    // printf(p"count = ${count}, ram = ${PEs(2)(3).ramio(0)}, ${PEs(2)(3).ramio(1)}, ${PEs(2)(3).ramio(2)}, ${PEs(2)(3).ramio(3)}\n")
+    // printf(p"count = ${count}, ram = ${PEs(3)(3).ramio(0)}, ${PEs(3)(3).ramio(1)}, ${PEs(3)(3).ramio(2)}, ${PEs(3)(3).ramio(3)}\n")
+
   }
+
+  def CountConnect(PEs:Seq[Seq[PE[T]]]): Unit = {
+    for (i<-0 until 4; j<-0 until 4) {
+      PEs(i)(j).count := count
+    } 
+  }
+  CountConnect(PEs)
+
+
   AInputConnect(PEs, 1, 0)
   BInputConnect(PEs, 0, 1)
   CInputConnect(PEs, 0, 1)
   COutputConnect(PEs, 0, 1)
 }
+
